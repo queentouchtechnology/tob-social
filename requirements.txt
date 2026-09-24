@@ -1,0 +1,2 @@
+Pillow>=10
+tzdata  # time zone database for zoneinfo on Windows; harmless on Linux

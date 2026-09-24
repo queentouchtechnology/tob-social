@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Truth of Bible blessing worker every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+# Catch up after the server was off at a scheduled time.
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

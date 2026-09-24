@@ -1,0 +1,89 @@
+"""Scheduled worker for the daily blessing post, controlled from the Frappe
+control panel (TOB Blessing Automation Settings). Run by a systemd timer every
+15 minutes on the outreach VPS; see deploy/README.md.
+
+Usage:
+    python blessing_worker.py                 # one scheduled run
+    python blessing_worker.py --dry-run       # decide + render, send/post/log nothing
+    python blessing_worker.py --status        # show what the control panel says
+    python blessing_worker.py --test-slack    # post a test message to the preview channel
+    python blessing_worker.py --import-verses # copy verses.json KJV text into empty panel verses (never approves)
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from tob_social import config
+from tob_social.automation import Run, choose_verse, local_now
+from tob_social.frappe_client import FrappeClient, FrappeError
+from tob_social.history import History
+from tob_social.slack import Slack, SlackError
+
+HERE = Path(__file__).resolve().parent
+
+
+def make_slack(cfg, env):
+    if cfg.get("preview_channel") != "Slack":
+        return None
+    try:
+        return Slack(env.get("SLACK_BOT_TOKEN"), cfg.get("slack_channel_id"))
+    except SlackError as e:
+        print(f"slack disabled: {e}")
+        return None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Daily blessing post worker.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--dry-run", action="store_true", help="decide and render only; send, post and log nothing")
+    group.add_argument("--status", action="store_true", help="show the control panel settings and approved verses")
+    group.add_argument("--test-slack", action="store_true", help="send a test message to the preview channel")
+    group.add_argument("--import-verses", action="store_true", help="fill empty KJV text in the panel from verses.json")
+    args = parser.parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    env = config.load_env(HERE / ".env")
+    try:
+        frappe = FrappeClient(env.get("FRAPPE_URL"), env.get("FRAPPE_API_KEY"), env.get("FRAPPE_API_SECRET"))
+        if args.import_verses:
+            verses = json.loads((HERE / "verses.json").read_text(encoding="utf-8"))
+            result = frappe.import_verse_texts(verses)
+            for key in ("filled", "created", "skipped", "unparsed"):
+                print(f"{key}: {len(result[key])}  {', '.join(result[key])}")
+            print("Nothing was approved. Check each text in the Desk and tick 'Checked & approved'.")
+            return 0
+        cfg = frappe.config()
+    except FrappeError as e:
+        # Without the control panel the worker never guesses: it posts nothing.
+        print(f"ERROR: {e}")
+        return 2
+
+    if args.status:
+        pick = choose_verse(cfg["verses"])
+        print(f"Automatic posting: {'ON' if cfg['enabled'] else 'OFF'}")
+        print(f"Post time: {cfg['post_time']}  design: {cfg['design']}  platforms: {', '.join(cfg['platforms']) or '-'}")
+        print(f"Preview: {cfg['preview_channel']} {cfg['slack_channel_id']} ({cfg['preview_minutes_before']} min before)")
+        print(f"Approved verses: {len(cfg['verses'])}  next: {pick['reference'] if pick else '-'}")
+        return 0
+
+    slack = make_slack(cfg, env)
+    if args.test_slack:
+        if not slack:
+            print("Slack is not the preview channel, or its token/channel is missing.")
+            return 1
+        slack.post(":wave: Test from the Truth of Bible blessing worker — previews will appear here.")
+        print("Sent.")
+        return 0
+
+    history = History(HERE / "data" / "history.db")
+    history.import_legacy_log(HERE / "post_log.txt")
+    run = Run(local_now(env), cfg, env, history, frappe, slack, out_image=HERE / "today.png", dry_run=args.dry_run)
+    results = run.execute()
+    failed = isinstance(results, list) and any(r["status"] == "FAILED" for r in results)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

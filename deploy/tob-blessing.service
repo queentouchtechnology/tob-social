@@ -1,0 +1,21 @@
+[Unit]
+Description=Truth of Bible daily blessing post (one scheduled run)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=tob
+Group=tob
+WorkingDirectory=/opt/tob-social
+ExecStart=/opt/tob-social/.venv/bin/python blessing_worker.py
+# Hard cap on a single run: a stalled network call can never block later runs.
+TimeoutStartSec=10min
+Nice=10
+
+# Hardening: the worker only needs its own folder and outbound HTTPS.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/tob-social
