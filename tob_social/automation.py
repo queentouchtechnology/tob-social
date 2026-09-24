@@ -75,6 +75,12 @@ class Run:
         if not retryable:
             return self.say(f"Gave up for today after {MAX_ATTEMPTS} failed attempts: {', '.join(pending)}.")
 
+        tz = self.now.tzinfo
+        post_at = datetime.datetime.combine(self.today, parse_time(cfg.get("post_time", "07:00:00")), tz)
+        preview_at = post_at - datetime.timedelta(minutes=cfg.get("preview_minutes_before") or 0)
+        if self.now < (preview_at if self.slack else post_at):
+            return self.say(f"Nothing due yet (preview {preview_at:%H:%M}, post {post_at:%H:%M}).")
+
         verse = choose_verse(cfg.get("verses", []))
         if not verse:
             self.say("No approved verse with KJV text in the control panel.")
@@ -83,12 +89,6 @@ class Run:
                 self.notify(":warning: Daily blessing post is ON but no verse is approved. "
                             "Tick 'Checked & approved' on at least one TOB Blessing Verse.")
             return
-
-        tz = self.now.tzinfo
-        post_at = datetime.datetime.combine(self.today, parse_time(cfg.get("post_time", "07:00:00")), tz)
-        preview_at = post_at - datetime.timedelta(minutes=cfg.get("preview_minutes_before") or 0)
-        if self.now < (preview_at if self.slack else post_at):
-            return self.say(f"Nothing due yet (preview {preview_at:%H:%M}, post {post_at:%H:%M}).")
 
         v = {"ref": verse["reference"], "text": verse["kjv_text"].strip()}
         caption = post_blessing.build_message(v, {k: cfg[c] for k, c in (("APP_LINK", "app_link"), ("HASHTAGS", "hashtags")) if cfg.get(c)})

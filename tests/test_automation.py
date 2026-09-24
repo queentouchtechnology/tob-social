@@ -145,6 +145,13 @@ class Failures(Base):
         self.assertEqual(self.events(), ["No Approved Verse"])
         self.assertEqual(len(self.slack.posts), 1)
 
+    def test_no_verse_alert_waits_until_preview_time(self):
+        cfg = config(verses=[])
+        self.run_at(at(0, 0), cfg)
+        self.assertEqual((self.events(), self.slack.posts), ([], []))
+        self.run_at(at(6, 0), cfg)
+        self.assertEqual(self.events(), ["No Approved Verse"])
+
     def test_dry_run_sends_and_logs_nothing(self):
         self.run_at(at(7, 0), dry_run=True)
         self.assertEqual((self.events(), self.slack.posts, self.slack.uploads, self.built), ([], [], [], []))
