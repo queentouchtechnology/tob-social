@@ -42,3 +42,6 @@ class FrappeClient:
 
     def import_verse_texts(self, verses):
         return self.call("import_verse_texts", verses=verses)
+
+    def import_content(self, items):
+        return self.call("import_content", items=items)

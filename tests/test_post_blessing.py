@@ -83,6 +83,13 @@ class Designs(unittest.TestCase):
                 with self.subTest(style=name, ref=verse["ref"]):
                     self.assertEqual(fn(verse).size, (1080, 1080))
 
+    def test_every_content_draft_renders_with_its_card(self):
+        items = json.loads((ROOT / "content.json").read_text(encoding="utf-8"))
+        self.assertEqual({i["content_type"] for i in items}, set(designs.CONTENT_CARDS))
+        for item in items:
+            with self.subTest(item=item["title"]):
+                self.assertEqual(designs.CONTENT_CARDS[item["content_type"]](item).size, (1080, 1080))
+
 
 class Config(unittest.TestCase):
     def test_platforms_default_and_override(self):
@@ -135,6 +142,30 @@ class Publishing(Tmp):
         self.history.record("facebook", TODAY, PUBLISHED, provider_post_id="a")
         with self.assertRaises(Exception):
             self.history.record("facebook", TODAY, PUBLISHED, provider_post_id="b")
+
+
+class Migration(unittest.TestCase):
+    def test_old_database_gains_kinds_and_keeps_rows(self):
+        import sqlite3
+        path = Path(tempfile.mkdtemp()) / "old.db"
+        db = sqlite3.connect(str(path))
+        db.executescript("""
+            CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, post_date TEXT NOT NULL,
+                platform TEXT NOT NULL, status TEXT NOT NULL, verse_ref TEXT, design TEXT, caption TEXT,
+                provider_post_id TEXT, asset_url TEXT, error TEXT, source TEXT NOT NULL DEFAULT 'post_blessing');
+            CREATE UNIQUE INDEX one_publish_per_platform_per_day ON posts (platform, post_date) WHERE status = 'PUBLISHED';
+            CREATE TABLE previews (post_date TEXT PRIMARY KEY, verse_ref TEXT NOT NULL, sent_at TEXT NOT NULL);
+            INSERT INTO posts (created_at, post_date, platform, status, provider_post_id)
+                VALUES ('2026-09-24T19:30', '2026-09-24', 'facebook', 'PUBLISHED', 'old-1');
+            INSERT INTO previews VALUES ('2026-09-24', 'Jeremiah 17:7', '2026-09-24T18:00');
+        """)
+        db.close()
+        h = History(path)
+        self.assertEqual(h.published("facebook", TODAY)["provider_post_id"], "old-1")
+        self.assertEqual(h.preview(TODAY)["verse_ref"], "Jeremiah 17:7")
+        h.record("facebook", TODAY, PUBLISHED, provider_post_id="feat-1", kind="feature")  # no clash with blessing
+        self.assertEqual(h.published("facebook", TODAY, "feature")["provider_post_id"], "feat-1")
+        h.db.close()
 
 
 class LegacyLog(Tmp):

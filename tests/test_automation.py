@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import designs
 from tob_social import publishers
-from tob_social.automation import MAX_ATTEMPTS, Run, choose_verse, parse_time
+from tob_social.automation import MAX_ATTEMPTS, Run, choose_content, choose_verse, content_caption, kind_of, parse_time
 from tob_social.history import History
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -35,9 +35,11 @@ def config(**overrides):
 class FakeFrappe:
     def __init__(self):
         self.events = []
+        self.fields = []
 
     def log(self, event, **fields):
         self.events.append((event, fields.get("platform")))
+        self.fields.append((event, fields))
 
 
 class FakeSlack:
@@ -67,15 +69,16 @@ class Base(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp())
         self.history = History(self.dir / "h.db")
         self.frappe, self.slack = FakeFrappe(), FakeSlack()
-        self.fail = set()
+        self.failing = set()
         self.built = []
-        patcher = mock.patch.object(designs, "render", lambda v, s, p: p)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, fake in (("render", lambda v, s, p: p), ("render_content", lambda i, p: p)):
+            patcher = mock.patch.object(designs, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.addCleanup(self.history.db.close)
 
     def factory(self, names, env):
-        pubs = [FakePublisher(n, n in self.fail) for n in names]
+        pubs = [FakePublisher(n, n in self.failing) for n in names]
         self.built.append(pubs)
         return pubs
 
@@ -132,7 +135,7 @@ class Timing(Base):
 
 class Failures(Base):
     def test_failed_platform_retried_then_given_up(self):
-        self.fail = {"instagram"}
+        self.failing = {"instagram"}
         for minute in range(0, 15 * (MAX_ATTEMPTS + 2), 15):
             self.run_at(at(7, 0) + datetime.timedelta(minutes=minute))
         self.assertEqual(self.events().count("Failed"), MAX_ATTEMPTS)
@@ -166,9 +169,105 @@ class TestPost(Base):
             results = run.test_post()
         self.assertEqual([r["status"] for r in results], ["TEST", "TEST"])
         self.assertEqual(self.history.published("facebook", DAY)["provider_post_id"], "facebook-1")
-        self.assertIn("TEST post", self.slack.uploads[-1])
+        self.assertIn("TEST daily blessing post", self.slack.uploads[-1])
         self.run_at(at(22, 15))  # a normal run afterwards still sees today as done
         self.assertEqual(len(self.built), 2)
+
+
+FEATURE_ITEM = {"name": "f1", "content_type": "App Feature", "title": "Gospel Compare",
+                "image_text": "Side by side.", "image_footer": "", "caption": "Read them together.",
+                "how_to_find": "Explore → Gospel Compare", "last_posted_on": None}
+PRAYER_ITEM = {"name": "p1", "content_type": "Salvation Prayer", "title": "God So Loved You",
+               "image_text": "Father, thank You...", "image_footer": "John 3:16", "caption": "Whosoever.",
+               "how_to_find": "", "last_posted_on": None}
+
+
+def schedule(content_type, items, on=True, weekdays=(DAY.weekday(),), post_time="18:00:00"):
+    return {"content_type": content_type, "enabled": on, "post_time": post_time, "weekdays": list(weekdays),
+            "hashtags": "", "items": list(items)}
+
+
+def with_schedules(*schedules, **overrides):
+    return config(schedules=list(schedules), **overrides)
+
+
+class ScheduledContent(Base):
+    def test_feature_posts_at_its_own_time_after_the_blessing(self):
+        cfg = with_schedules(schedule("App Feature", [FEATURE_ITEM]))
+        self.run_at(at(7, 0), cfg)   # blessing
+        self.run_at(at(17, 0), cfg)  # feature preview
+        self.run_at(at(18, 0), cfg)  # feature post
+        self.assertEqual(self.events(), ["Preview Sent", "Posted", "Posted", "Preview Sent", "Posted", "Posted"])
+        self.assertIsNotNone(self.history.published("facebook", DAY, "app_feature"))
+        posts = [f for e, f in self.frappe.fields if e == "Posted" and f.get("post_type") == "App Feature"]
+        self.assertEqual({f["social_content"] for f in posts}, {"f1"})
+        self.assertTrue(all("blessing_verse" not in f for f in posts))
+
+    def test_three_kinds_same_day_are_independent(self):
+        cfg = with_schedules(schedule("App Feature", [FEATURE_ITEM], post_time="12:00:00"),
+                             schedule("Salvation Prayer", [PRAYER_ITEM], post_time="20:00:00"))
+        for hh in (7, 12, 20):
+            self.run_at(at(hh, 0), cfg)
+        self.assertEqual(self.events().count("Posted"), 6)
+        for kind in ("blessing", "app_feature", "salvation_prayer"):
+            self.assertIsNotNone(self.history.published("instagram", DAY, kind), kind)
+        prayer = [f for e, f in self.frappe.fields if e == "Posted" and f.get("post_type") == "Salvation Prayer"]
+        self.assertEqual({f["social_content"] for f in prayer}, {"p1"})
+
+    def test_not_a_scheduled_day(self):
+        self.run_at(at(18, 0), with_schedules(schedule("App Feature", [FEATURE_ITEM],
+                                                       weekdays=[(DAY.weekday() + 1) % 7])))
+        self.assertEqual(self.events(), ["Preview Sent", "Posted", "Posted"])  # blessing only
+
+    def test_schedule_row_off(self):
+        self.run_at(at(18, 0), with_schedules(schedule("App Feature", [FEATURE_ITEM], on=False)))
+        self.assertEqual(self.events(), ["Preview Sent", "Posted", "Posted"])
+
+    def test_master_switch_stops_scheduled_content_too(self):
+        self.run_at(at(18, 0), with_schedules(schedule("App Feature", [FEATURE_ITEM]), enabled=False))
+        self.assertEqual(self.events(), [])
+
+    def test_nothing_approved_alerts_once_per_type(self):
+        cfg = with_schedules(schedule("App Feature", []), schedule("Salvation Prayer", []))
+        self.run_at(at(18, 0), cfg)
+        self.run_at(at(18, 15), cfg)
+        self.assertEqual(self.events().count("No Approved Content"), 2)
+
+    def test_content_test_post_is_unlinked(self):
+        run = Run(at(10, 0), with_schedules(schedule("Salvation Prayer", [PRAYER_ITEM])), {}, self.history,
+                  self.frappe, self.slack, self.factory, out_image=self.dir / "today.png")
+        with contextlib.redirect_stdout(io.StringIO()):
+            results = run.test_post("salvation_prayer")
+        self.assertEqual([r["status"] for r in results], ["TEST", "TEST"])
+        self.assertTrue(all("social_content" not in f for _, f in self.frappe.fields))
+        self.assertIsNone(self.history.published("facebook", DAY, "salvation_prayer"))
+
+    def test_test_post_unknown_kind(self):
+        run = Run(at(10, 0), config(), {}, self.history, self.frappe, self.slack, self.factory,
+                  out_image=self.dir / "today.png")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(run.test_post("app_feature"))
+        self.assertEqual(self.built, [])
+
+
+class Captions(unittest.TestCase):
+    def test_feature_caption(self):
+        text = content_caption(FEATURE_ITEM, "https://app", "#App")
+        for part in ("Gospel Compare", "Read them together.", "In the app: Explore → Gospel Compare",
+                     "https://app", "#App"):
+            self.assertIn(part, text)
+
+    def test_prayer_caption_uses_type_defaults(self):
+        text = content_caption(PRAYER_ITEM, "https://app")
+        self.assertIn("God So Loved You", text)
+        self.assertIn("#Salvation", text)
+        self.assertNotIn("In the app", text)
+
+    def test_choose_content_needs_caption(self):
+        self.assertIsNone(choose_content([{**FEATURE_ITEM, "caption": " "}]))
+
+    def test_kind_of(self):
+        self.assertEqual(kind_of("Salvation Prayer"), "salvation_prayer")
 
 
 class VerseChoice(unittest.TestCase):

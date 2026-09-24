@@ -1,6 +1,7 @@
 # Truth of Bible — Social Automation
 
-Posts a daily blessing verse image to the Truth of Bible Facebook Page and Instagram.
+Posts to the Truth of Bible Facebook Page and Instagram: a daily blessing verse, plus scheduled
+content (app features, salvation prayers, ...) on chosen weekdays, all from hand-approved text.
 
 The scheduled worker (`blessing_worker.py`) runs on the outreach VPS every 15 minutes and is
 controlled from the Frappe app (`truthofbible-ai`): on/off, post time, design, platforms, Slack
@@ -24,6 +25,8 @@ cp .env.example .env      # then fill in FB_PAGE_ACCESS_TOKEN
 | `python post_blessing.py --history` | Recent posts and failures |
 | `python blessing_worker.py --status` | What the Frappe control panel currently says |
 | `python blessing_worker.py --dry-run` | One scheduled run that sends, posts and logs nothing |
+| `python blessing_worker.py --test-post salvation_prayer` | Post one approved item of that kind now (recorded as TEST) |
+| `python blessing_worker.py --import-content` | Add content.json drafts to the panel (never approves) |
 | `python designs.py` | Rebuild all style previews into `design_previews/` |
 | `python -m unittest discover -s tests -t .` | Run the tests (no network access) |
 

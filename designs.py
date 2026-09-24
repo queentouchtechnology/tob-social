@@ -373,6 +373,61 @@ STYLES = {
 }
 
 
+def feature_card(feature):
+    """App feature post: feature name large, one-line benefit, and a Google Play pill,
+    in the modern_mono palette so feature posts sit visually with the verse posts."""
+    img = Image.new("RGB", (SIZE, SIZE), (245, 244, 240))
+    d = ImageDraw.Draw(img)
+    ink, accent, grey = (20, 20, 20), (255, 94, 58), (90, 90, 90)
+    d.ellipse([740, 700, 1340, 1300], fill=accent)
+    spaced(d, "TRUTH OF BIBLE APP", 120, font("segoeuib.ttf", 28), accent, 8, x=110)
+    d.line([(110, 175), (210, 175)], fill=accent, width=4)
+
+    title_font, title_lines, title_h = fit(d, feature["title"], "segoeuib.ttf", 860, 300, 110, leading=1.1)
+    y = 230
+    text_block(d, title_lines, title_font, title_h, y, ink, x=110)
+    y += len(title_lines) * title_h + 30
+    tag_font, tag_lines, tag_h = fit(d, feature.get("image_text") or "", "segoeuisl.ttf", 760, 900 - y - 60, 50,
+                                     leading=1.3)
+    text_block(d, tag_lines, tag_font, tag_h, y, grey, x=110)
+
+    pill = font("segoeuib.ttf", 30)
+    label = "Get it on Google Play"
+    w = d.textlength(label, font=pill)
+    d.rounded_rectangle([110, 900, 110 + w + 64, 970], radius=35, fill=ink)
+    d.text((142, 915), label, font=pill, fill=(255, 255, 255))
+    return img
+
+
+def prayer_card(item):
+    """Salvation prayer: warm night-blue card, the prayer itself in serif italic,
+    title and Scripture footer in gold — reverent, not promotional."""
+    img = gradient((20, 26, 48), (46, 36, 66))
+    glow(img, (240, -260, 840, 260), (255, 214, 150, 90), 120)
+    d = ImageDraw.Draw(img)
+    gold, white = (236, 200, 128), (248, 244, 236)
+    spaced(d, "A PRAYER OF SALVATION", 110, font("georgiab.ttf", 26), gold, 7)
+    d.line([(SIZE / 2 - 60, 160), (SIZE / 2 + 60, 160)], fill=gold, width=2)
+    title_font, title_lines, title_h = fit(d, item["title"], "georgiab.ttf", 860, 150, 64, leading=1.15)
+    text_block(d, title_lines, title_font, title_h, 195, gold)
+    top = 195 + len(title_lines) * title_h + 40
+    body_font, body_lines, body_h = fit(d, item.get("image_text") or "", "georgiai.ttf", 820, 850 - top, 44)
+    text_block(d, body_lines, body_font, body_h, top, white, box_h=850 - top)
+    if item.get("image_footer"):
+        centered(d, f"— {item['image_footer']}", 880, font("georgiab.ttf", 36), gold)
+    spaced(d, "TRUTH OF BIBLE", 970, font("segoeuil.ttf", 24), (190, 180, 210), 8)
+    return img
+
+
+# Card design per TOB Social Content type; unknown types get the feature card.
+CONTENT_CARDS = {"App Feature": feature_card, "Salvation Prayer": prayer_card}
+
+
+def render_content(item, path):
+    CONTENT_CARDS.get(item.get("content_type"), feature_card)(item).save(path, "PNG")
+    return path
+
+
 def render(verse, style, path):
     STYLES[style](verse).save(path, "PNG")
     return path

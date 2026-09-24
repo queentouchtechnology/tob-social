@@ -20,7 +20,7 @@ from pathlib import Path
 
 import designs
 from tob_social import config, publishers
-from tob_social.history import FAILED, PUBLISHED, History
+from tob_social.history import BLESSING, FAILED, PUBLISHED, History
 
 HERE = Path(__file__).resolve().parent
 HISTORY_DB = HERE / "data" / "history.db"
@@ -53,13 +53,14 @@ def log(line, path=LEGACY_LOG):
         f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {line}\n")
 
 
-def publish_all(pubs, post, today, history, verse, style, log_path=LEGACY_LOG):
-    """Publish to each platform not yet done today.
+def publish_all(pubs, post, today, history, verse, style, log_path=LEGACY_LOG, kind=BLESSING):
+    """Publish to each platform not yet done today for this kind of post.
+    `verse` is {"ref": ...} — the verse reference, or the feature title for feature posts.
     Returns one {"platform", "status", "post_id", "error"} per platform; status is
     PUBLISHED, FAILED, or SKIPPED (already posted today)."""
     results = []
     for pub in pubs:
-        done = history.published(pub.name, today)
+        done = history.published(pub.name, today, kind)
         if done:
             print(f"{pub.name}: already posted today ({done['provider_post_id']}), skipping")
             post.image_url = post.image_url or done["asset_url"]
@@ -69,14 +70,15 @@ def publish_all(pubs, post, today, history, verse, style, log_path=LEGACY_LOG):
             result = pub.publish(post)
         except publishers.PublishError as e:
             history.record(pub.name, today, FAILED, verse_ref=verse["ref"], design=style,
-                           caption=post.caption, error=str(e))
+                           caption=post.caption, error=str(e), kind=kind)
             print(f"{pub.name}: FAILED - {e}")
             results.append({"platform": pub.name, "status": FAILED, "post_id": None, "error": str(e)})
             continue
         post.image_url = post.image_url or result.image_url
         history.record(pub.name, today, PUBLISHED, verse_ref=verse["ref"], design=style, caption=post.caption,
-                       provider_post_id=result.post_id, asset_url=result.image_url)
-        log(f"{pub.name} {result.post_id} {verse['ref']}", log_path)
+                       provider_post_id=result.post_id, asset_url=result.image_url, kind=kind)
+        if kind == BLESSING:  # the legacy log only ever held blessing posts
+            log(f"{pub.name} {result.post_id} {verse['ref']}", log_path)
         print(f"{pub.name}: posted {result.post_id}")
         results.append({"platform": pub.name, "status": PUBLISHED, "post_id": result.post_id, "error": None})
     return results
@@ -101,7 +103,7 @@ def main(argv=None):
     if args.history:
         for row in history.recent():
             detail = row["provider_post_id"] or row["error"]
-            print(f"{row['post_date']}  {row['platform']:<10} {row['status']:<9} {row['verse_ref'] or '':<22} {detail}")
+            print(f"{row['post_date']}  {row['kind']:<9} {row['platform']:<10} {row['status']:<9} {row['verse_ref'] or '':<22} {detail}")
         return 0
 
     if args.check or args.post:

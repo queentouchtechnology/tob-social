@@ -1,5 +1,6 @@
-"""Scheduled worker for the daily blessing post, controlled from the Frappe
-control panel (TOB Blessing Automation Settings). Run by a systemd timer every
+"""Scheduled worker for the daily blessing post and scheduled content posts (app
+features, salvation prayers, ...), controlled from the Frappe control panel
+(TOB Blessing Automation Settings). Run by a systemd timer every
 15 minutes on the outreach VPS; see deploy/README.md.
 
 Usage:
@@ -8,7 +9,8 @@ Usage:
     python blessing_worker.py --status        # show what the control panel says
     python blessing_worker.py --test-slack    # post a test message to the preview channel
     python blessing_worker.py --import-verses # copy verses.json KJV text into empty panel verses (never approves)
-    python blessing_worker.py --test-post     # post the next approved verse NOW (recorded as TEST)
+    python blessing_worker.py --import-content  # add content.json drafts to the panel (never approves)
+    python blessing_worker.py --test-post [blessing|app_feature|salvation_prayer]  # post one NOW (recorded as TEST)
 """
 import argparse
 import json
@@ -16,7 +18,7 @@ import sys
 from pathlib import Path
 
 from tob_social import config
-from tob_social.automation import Run, choose_verse, local_now
+from tob_social.automation import Run, choose_content, choose_verse, local_now
 from tob_social.frappe_client import FrappeClient, FrappeError
 from tob_social.history import History
 from tob_social.slack import Slack, SlackError
@@ -40,9 +42,11 @@ def main(argv=None):
     group.add_argument("--dry-run", action="store_true", help="decide and render only; send, post and log nothing")
     group.add_argument("--status", action="store_true", help="show the control panel settings and approved verses")
     group.add_argument("--test-slack", action="store_true", help="send a test message to the preview channel")
-    group.add_argument("--test-post", action="store_true",
-                       help="post the next approved verse now, ignoring time/switch/today's post (recorded as TEST)")
+    group.add_argument("--test-post", nargs="?", const="blessing", metavar="KIND",
+                       help="post the next approved item now, ignoring time/switches/today's post (recorded as "
+                            "TEST). KIND: blessing (default), app_feature, salvation_prayer, ...")
     group.add_argument("--import-verses", action="store_true", help="fill empty KJV text in the panel from verses.json")
+    group.add_argument("--import-content", action="store_true", help="add content.json drafts to the panel")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -57,6 +61,14 @@ def main(argv=None):
                 print(f"{key}: {len(result[key])}  {', '.join(result[key])}")
             print("Nothing was approved. Check each text in the Desk and tick 'Checked & approved'.")
             return 0
+        if args.import_content:
+            items = json.loads((HERE / "content.json").read_text(encoding="utf-8"))
+            result = frappe.import_content(items)
+            for key in ("created", "skipped"):
+                print(f"{key}: {len(result[key])}  {', '.join(result[key])}")
+            print("Nothing was approved. Check every item (app facts, prayers, Scripture) and tick "
+                  "'Checked & approved'.")
+            return 0
         cfg = frappe.config()
     except FrappeError as e:
         # Without the control panel the worker never guesses: it posts nothing.
@@ -69,6 +81,12 @@ def main(argv=None):
         print(f"Post time: {cfg['post_time']}  design: {cfg['design']}  platforms: {', '.join(cfg['platforms']) or '-'}")
         print(f"Preview: {cfg['preview_channel']} {cfg['slack_channel_id']} ({cfg['preview_minutes_before']} min before)")
         print(f"Approved verses: {len(cfg['verses'])}  next: {pick['reference'] if pick else '-'}")
+        for sched in cfg.get("schedules") or []:
+            days = ", ".join("Mon Tue Wed Thu Fri Sat Sun".split()[d] for d in sched.get("weekdays", [])) or "-"
+            nxt = choose_content(sched.get("items", []))
+            print(f"{sched['content_type']}: {'ON' if sched.get('enabled') else 'OFF'}  days: {days}  "
+                  f"time: {sched.get('post_time')}  approved: {len(sched.get('items', []))}  "
+                  f"next: {nxt['title'] if nxt else '-'}")
         return 0
 
     slack = make_slack(cfg, env)
@@ -83,7 +101,7 @@ def main(argv=None):
     history = History(HERE / "data" / "history.db")
     history.import_legacy_log(HERE / "post_log.txt")
     run = Run(local_now(env), cfg, env, history, frappe, slack, out_image=HERE / "today.png", dry_run=args.dry_run)
-    results = run.test_post() if args.test_post else run.execute()
+    results = run.test_post(args.test_post) if args.test_post else run.execute()
     failed = isinstance(results, list) and any(r["status"] == "FAILED" for r in results)
     return 1 if failed else 0
 
