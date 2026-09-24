@@ -20,7 +20,9 @@ SUBSTITUTES = {
     "georgia.ttf": "NotoSerif-Regular.ttf", "georgiab.ttf": "NotoSerif-Bold.ttf",
     "georgiai.ttf": "NotoSerif-Italic.ttf",
     "segoeui.ttf": "NotoSans-Regular.ttf", "segoeuib.ttf": "NotoSans-Bold.ttf",
-    "segoeuil.ttf": "NotoSans-Light.ttf", "segoeuisl.ttf": "NotoSans-Light.ttf",
+    # Ubuntu's fonts-noto-core has no Light weight; Regular is the nearest installed.
+    "segoeuil.ttf": ("NotoSans-Light.ttf", "NotoSans-Regular.ttf"),
+    "segoeuisl.ttf": ("NotoSans-Light.ttf", "NotoSans-Regular.ttf"),
     "seguisym.ttf": "NotoSansSymbols2-Regular.ttf",
     "pala.ttf": "texgyrepagella-regular.otf", "palab.ttf": "texgyrepagella-bold.otf",
     "palai.ttf": "texgyrepagella-italic.otf",
@@ -34,15 +36,19 @@ SUBSTITUTES = {
 def font_path(name):
     """Full path of `name` or its Linux substitute. Raises instead of falling back to
     Pillow's tiny bitmap font, so a missing font fails the run rather than the post."""
-    wanted = {name.lower(), SUBSTITUTES.get(name, name).lower()}
+    subs = SUBSTITUTES.get(name, ())
+    candidates = [name] + ([subs] if isinstance(subs, str) else list(subs))  # in order of preference
+    found = {}
     for root in FONT_DIRS:
         if not os.path.isdir(root):
             continue
         for dirpath, _dirs, files in os.walk(root):
             for f in files:
-                if f.lower() in wanted:
-                    return os.path.join(dirpath, f)
-    raise FileNotFoundError(f"Font {name} (or substitute {SUBSTITUTES.get(name)}) not found in {FONT_DIRS}")
+                found.setdefault(f.lower(), os.path.join(dirpath, f))
+    for candidate in candidates:
+        if candidate.lower() in found:
+            return found[candidate.lower()]
+    raise FileNotFoundError(f"Font {name} (or substitutes {subs}) not found in {FONT_DIRS}")
 
 
 def font(name, size):
