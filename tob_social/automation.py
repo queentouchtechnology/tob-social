@@ -63,6 +63,55 @@ class Run:
         except Exception as e:  # local history already guards duplicates; the panel log is best-effort
             self.say(f"frappe log failed: {e}")
 
+    def content(self, verse):
+        """(verse dict for rendering, caption, design, image path) for an approved panel verse."""
+        cfg = self.cfg
+        v = {"ref": verse["reference"], "text": verse["kjv_text"].strip()}
+        caption = post_blessing.build_message(
+            v, {k: cfg[c] for k, c in (("APP_LINK", "app_link"), ("HASHTAGS", "hashtags")) if cfg.get(c)})
+        design = cfg.get("design") if cfg.get("design") in designs.STYLES else FALLBACK_DESIGN
+        return v, caption, design, designs.render(v, design, self.out_image)
+
+    def test_post(self):
+        """Post the next approved verse NOW, ignoring post time, the on/off switch and today's posts —
+        for checking the whole chain. Recorded as TEST (history and panel log), so the one-post-a-day
+        guard and the verse rotation are unaffected."""
+        verse = choose_verse(self.cfg.get("verses", []))
+        if not verse:
+            return self.say("No approved verse to test with.")
+        v, caption, design, image = self.content(verse)
+        platforms = self.cfg.get("platforms", [])
+        self.say(f"TEST post of {v['ref']} ({design}) to {', '.join(platforms)}.")
+        if self.slack:
+            try:
+                self.slack.upload(image, f"*TEST post* (to be deleted) — posting now to {', '.join(platforms)}.\n\n{caption}")
+            except Exception as e:
+                self.say(f"slack preview failed: {e}")
+
+        post, results, lines = publishers.Post(caption, image), [], []
+        for pub in self.build(platforms, self.env):
+            try:
+                r = pub.publish(post)
+            except publishers.PublishError as e:
+                self.history.record(pub.name, self.today, "TEST_FAILED", verse_ref=v["ref"], design=design,
+                                    caption=caption, error=str(e), source="test_post")
+                self.log("Failed", platform=pub.name, reference=v["ref"], message=f"TEST post: {e}")
+                lines.append(f":x: {pub.name}: failed — {str(e)[:300]}")
+                results.append({"platform": pub.name, "status": FAILED, "post_id": None, "error": str(e)})
+                self.say(f"{pub.name}: FAILED - {e}")
+                continue
+            post.image_url = post.image_url or r.image_url
+            self.history.record(pub.name, self.today, "TEST", verse_ref=v["ref"], design=design, caption=caption,
+                                provider_post_id=r.post_id, asset_url=r.image_url, source="test_post")
+            # No blessing_verse link, so the panel doesn't count it for rotation.
+            self.log("Posted", platform=pub.name, reference=v["ref"], post_id=r.post_id,
+                     message="TEST post (manual, to be deleted)")
+            lines.append(f":white_check_mark: {pub.name}: posted ({r.post_id})")
+            results.append({"platform": pub.name, "status": "TEST", "post_id": r.post_id, "error": None})
+            self.say(f"{pub.name}: posted {r.post_id}")
+        self.notify(f"*TEST post — {v['ref']}*\n" + "\n".join(lines))
+        return results
+
     def execute(self):
         cfg = self.cfg
         if not cfg.get("enabled"):
@@ -90,10 +139,7 @@ class Run:
                             "Tick 'Checked & approved' on at least one TOB Blessing Verse.")
             return
 
-        v = {"ref": verse["reference"], "text": verse["kjv_text"].strip()}
-        caption = post_blessing.build_message(v, {k: cfg[c] for k, c in (("APP_LINK", "app_link"), ("HASHTAGS", "hashtags")) if cfg.get(c)})
-        design = cfg.get("design") if cfg.get("design") in designs.STYLES else FALLBACK_DESIGN
-        image = designs.render(v, design, self.out_image)
+        v, caption, design, image = self.content(verse)
 
         preview = self.history.preview(self.today)
         if self.slack and not preview:

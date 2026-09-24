@@ -8,6 +8,7 @@ Usage:
     python blessing_worker.py --status        # show what the control panel says
     python blessing_worker.py --test-slack    # post a test message to the preview channel
     python blessing_worker.py --import-verses # copy verses.json KJV text into empty panel verses (never approves)
+    python blessing_worker.py --test-post     # post the next approved verse NOW (recorded as TEST)
 """
 import argparse
 import json
@@ -39,6 +40,8 @@ def main(argv=None):
     group.add_argument("--dry-run", action="store_true", help="decide and render only; send, post and log nothing")
     group.add_argument("--status", action="store_true", help="show the control panel settings and approved verses")
     group.add_argument("--test-slack", action="store_true", help="send a test message to the preview channel")
+    group.add_argument("--test-post", action="store_true",
+                       help="post the next approved verse now, ignoring time/switch/today's post (recorded as TEST)")
     group.add_argument("--import-verses", action="store_true", help="fill empty KJV text in the panel from verses.json")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
@@ -80,7 +83,7 @@ def main(argv=None):
     history = History(HERE / "data" / "history.db")
     history.import_legacy_log(HERE / "post_log.txt")
     run = Run(local_now(env), cfg, env, history, frappe, slack, out_image=HERE / "today.png", dry_run=args.dry_run)
-    results = run.execute()
+    results = run.test_post() if args.test_post else run.execute()
     failed = isinstance(results, list) and any(r["status"] == "FAILED" for r in results)
     return 1 if failed else 0
 

@@ -157,6 +157,20 @@ class Failures(Base):
         self.assertEqual((self.events(), self.slack.posts, self.slack.uploads, self.built), ([], [], [], []))
 
 
+class TestPost(Base):
+    def test_posts_even_after_todays_post_without_touching_the_guard(self):
+        self.run_at(at(7, 0))  # the real post for today
+        run = Run(at(22, 0), config(enabled=False), {}, self.history, self.frappe, self.slack, self.factory,
+                  out_image=self.dir / "today.png")
+        with contextlib.redirect_stdout(io.StringIO()):
+            results = run.test_post()
+        self.assertEqual([r["status"] for r in results], ["TEST", "TEST"])
+        self.assertEqual(self.history.published("facebook", DAY)["provider_post_id"], "facebook-1")
+        self.assertIn("TEST post", self.slack.uploads[-1])
+        self.run_at(at(22, 15))  # a normal run afterwards still sees today as done
+        self.assertEqual(len(self.built), 2)
+
+
 class VerseChoice(unittest.TestCase):
     def test_never_posted_first_then_oldest(self):
         verses = [
