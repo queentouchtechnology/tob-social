@@ -16,8 +16,9 @@ sends the Slack preview, posts at the configured time, and writes every result t
 
 ## 2. VPS
 ```bash
-# from your PC: copy the project (no secrets travel in the copy — .env is excluded below)
-rsync -a --exclude .env --exclude data/ --exclude .git ./ tob-vps:/root/tob-social-src/
+# from your PC (Git Bash), in the project folder: copy the COMMITTED code only —
+# git archive can't include .env or any other ignored file, so no secrets travel.
+git archive --format=tar HEAD | ssh tob-vps 'rm -rf /root/tob-social-src && mkdir -p /root/tob-social-src && tar xf - -C /root/tob-social-src'
 ssh tob-vps 'cd /root/tob-social-src && bash deploy/setup.sh'
 ssh tob-vps 'nano /opt/tob-social/.env'   # fill in the values listed in .env.example
 ```
@@ -49,4 +50,4 @@ Then tick **Automatic posting ON** in the control panel.
 | See what happened | **TOB Automation Log** in the Desk, or `journalctl -u tob-blessing -n 50` |
 | Is the worker alive? | *Worker Last Checked In* in the panel (should be < 30 min old) |
 | Local post history | `sudo -u tob .venv/bin/python post_blessing.py --history` |
-| Update the code | re-run step 2's rsync + `bash deploy/setup.sh` |
+| Update the code | commit, then re-run step 2 (git archive + `bash deploy/setup.sh`) |
