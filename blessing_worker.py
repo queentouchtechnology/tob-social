@@ -30,23 +30,31 @@ def make_slack(cfg, env):
     if cfg.get("preview_channel") != "Slack":
         return None
     try:
-        return Slack(env.get("SLACK_BOT_TOKEN"), cfg.get("slack_channel_id"))
+        # Frappe holds the token; .env is only a fallback until the one-time move.
+        return Slack(cfg.get("slack_bot_token") or env.get("SLACK_BOT_TOKEN"), cfg.get("slack_channel_id"))
     except SlackError as e:
         print(f"slack disabled: {e}")
         return None
 
 
 def migrate_token(frappe, cfg, env):
-    """One-time move of a Page token still in .env into Frappe's TOB Meta Connection (its only home).
-    Frappe accepts this only while it has no token. Returns True if the token was moved."""
+    """One-time move of secrets still in .env into Frappe, their only home: the Meta Page token into TOB Meta
+    Connection, the Slack bot token into TOB Blessing Automation Settings. Frappe accepts each only while it
+    has none. Returns True if anything was moved."""
+    moved = False
     meta = cfg.get("meta") or {}
-    if meta.get("status") != "Not Configured" or not env.get("FB_PAGE_ACCESS_TOKEN"):
-        return False
-    result = frappe.call("seed_from_worker", page_id=env.get("FB_PAGE_ID", ""),
-                         access_token=env["FB_PAGE_ACCESS_TOKEN"], prefix=META_PREFIX)
-    print(f"Moved the Meta token into Frappe (TOB Meta Connection): {result.get('status')}. "
-          "Remove FB_PAGE_ACCESS_TOKEN from .env.")
-    return True
+    if meta.get("status") == "Not Configured" and env.get("FB_PAGE_ACCESS_TOKEN"):
+        result = frappe.call("seed_from_worker", page_id=env.get("FB_PAGE_ID", ""),
+                             access_token=env["FB_PAGE_ACCESS_TOKEN"], prefix=META_PREFIX)
+        print(f"Moved the Meta token into Frappe (TOB Meta Connection): {result.get('status')}. "
+              "Remove FB_PAGE_ID / FB_PAGE_ACCESS_TOKEN from .env.")
+        moved = True
+    # Only a Frappe that knows the field sends the key at all, so an older one is never asked.
+    if "slack_bot_token" in cfg and not cfg["slack_bot_token"] and env.get("SLACK_BOT_TOKEN"):
+        if frappe.call("seed_worker_secrets", slack_bot_token=env["SLACK_BOT_TOKEN"]).get("moved"):
+            print("Moved the Slack bot token into Frappe. Remove SLACK_BOT_TOKEN from .env.")
+            moved = True
+    return moved
 
 
 def with_meta_token(cfg, env):
@@ -124,7 +132,8 @@ def main(argv=None):
 
     history = History(HERE / "data" / "history.db")
     history.import_legacy_log(HERE / "post_log.txt")
-    run = Run(local_now(env), cfg, env, history, frappe, slack, out_image=HERE / "today.png", dry_run=args.dry_run)
+    now = local_now({"TIMEZONE": cfg.get("timezone") or env.get("TIMEZONE") or config.DEFAULT_TIMEZONE})
+    run = Run(now, cfg, env, history, frappe, slack, out_image=HERE / "today.png", dry_run=args.dry_run)
     results = run.test_post(args.test_post) if args.test_post else run.execute()
     failed = isinstance(results, list) and any(r["status"] == "FAILED" for r in results)
     return 1 if failed else 0

@@ -295,6 +295,35 @@ class WorkerToken(unittest.TestCase):
             self.assertTrue(blessing_worker.migrate_token(client, {"meta": {"status": "Not Configured"}}, env))
         self.assertEqual([c[0] for c in client.calls], ["seed_from_worker"])
 
+    def test_slack_token_moved_once_and_only_to_new_frappe(self):
+        import blessing_worker
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, **params):
+                self.calls.append(method)
+                return {"moved": ["slack_bot_token"]}
+
+        env = {"SLACK_BOT_TOKEN": "xoxb-x"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            old = Client()
+            self.assertFalse(blessing_worker.migrate_token(old, {"meta": {"status": "OK"}}, env))  # no key sent
+            has = Client()
+            self.assertFalse(blessing_worker.migrate_token(has, {"slack_bot_token": "xoxb-set"}, env))
+            empty = Client()
+            self.assertTrue(blessing_worker.migrate_token(empty, {"slack_bot_token": ""}, env))
+        self.assertEqual((old.calls, has.calls, empty.calls), ([], [], ["seed_worker_secrets"]))
+
+    def test_slack_prefers_frappe_token(self):
+        import blessing_worker
+        with contextlib.redirect_stdout(io.StringIO()):
+            slack = blessing_worker.make_slack(
+                {"preview_channel": "Slack", "slack_channel_id": "C1", "slack_bot_token": "from-frappe"},
+                {"SLACK_BOT_TOKEN": "from-env"})
+        self.assertEqual(slack.token, "from-frappe")
+
 
 class Captions(unittest.TestCase):
     def test_feature_caption(self):
