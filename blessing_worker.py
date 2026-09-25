@@ -19,7 +19,7 @@ from pathlib import Path
 
 from tob_social import config
 from tob_social.automation import Run, choose_content, choose_verse, local_now
-from tob_social.frappe_client import FrappeClient, FrappeError
+from tob_social.frappe_client import META_PREFIX, FrappeClient, FrappeError
 from tob_social.history import History
 from tob_social.slack import Slack, SlackError
 
@@ -34,6 +34,27 @@ def make_slack(cfg, env):
     except SlackError as e:
         print(f"slack disabled: {e}")
         return None
+
+
+def migrate_token(frappe, cfg, env):
+    """One-time move of a Page token still in .env into Frappe's TOB Meta Connection (its only home).
+    Frappe accepts this only while it has no token. Returns True if the token was moved."""
+    meta = cfg.get("meta") or {}
+    if meta.get("status") != "Not Configured" or not env.get("FB_PAGE_ACCESS_TOKEN"):
+        return False
+    result = frappe.call("seed_from_worker", page_id=env.get("FB_PAGE_ID", ""),
+                         access_token=env["FB_PAGE_ACCESS_TOKEN"], prefix=META_PREFIX)
+    print(f"Moved the Meta token into Frappe (TOB Meta Connection): {result.get('status')}. "
+          "Remove FB_PAGE_ACCESS_TOKEN from .env.")
+    return True
+
+
+def with_meta_token(cfg, env):
+    """Use the Page token Frappe sends (TOB Meta Connection); .env no longer needs one."""
+    meta = cfg.get("meta") or {}
+    if meta.get("page_access_token"):
+        return {**env, "FB_PAGE_ID": meta.get("page_id", ""), "FB_PAGE_ACCESS_TOKEN": meta["page_access_token"]}
+    return env
 
 
 def main(argv=None):
@@ -70,10 +91,13 @@ def main(argv=None):
                   "'Checked & approved'.")
             return 0
         cfg = frappe.config()
+        if migrate_token(frappe, cfg, env):
+            cfg = frappe.config()
     except FrappeError as e:
         # Without the control panel the worker never guesses: it posts nothing.
         print(f"ERROR: {e}")
         return 2
+    env = with_meta_token(cfg, env)
 
     if args.status:
         pick = choose_verse(cfg["verses"])

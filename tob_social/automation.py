@@ -165,7 +165,20 @@ class Run:
         design = cfg.get("design") if cfg.get("design") in designs.STYLES else FALLBACK_DESIGN
         return caption, design, designs.render(v, design, self.out_image)
 
+    def check_meta_connection(self):
+        """Warn once a day when Frappe's TOB Meta Connection isn't OK; False when there's no token to post with."""
+        meta = self.cfg.get("meta")
+        if meta is not None:
+            status = meta.get("status") or "Not Configured"
+            if status != "OK" and not self.dry_run and self.history.notice_once(self.today, f"meta_{status}"):
+                self.notify(f":warning: Meta connection: *{status}*. {meta.get('status_message') or ''} "
+                            "Fix it in the admin app: Social Automation → Overview → Meta connection.")
+        return bool(self.env.get("FB_PAGE_ACCESS_TOKEN"))
+
     def execute(self):
+        if not self.check_meta_connection():
+            self.say("No Meta token: connect Facebook in TOB Meta Connection. Nothing posted.")
+            return []
         results = []
         for job in self.jobs():
             out = self.run_job(job)

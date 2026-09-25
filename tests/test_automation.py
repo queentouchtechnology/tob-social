@@ -82,8 +82,9 @@ class Base(unittest.TestCase):
         self.built.append(pubs)
         return pubs
 
-    def run_at(self, when, cfg=None, slack=True, dry_run=False):
-        run = Run(when, cfg or config(), {}, self.history, self.frappe, self.slack if slack else None,
+    def run_at(self, when, cfg=None, slack=True, dry_run=False, env=None):
+        env = {"FB_PAGE_ACCESS_TOKEN": "page-token"} if env is None else env
+        run = Run(when, cfg or config(), env, self.history, self.frappe, self.slack if slack else None,
                   self.factory, out_image=self.dir / "today.png", dry_run=dry_run)
         with contextlib.redirect_stdout(io.StringIO()), mock.patch("post_blessing.log"):
             return run.execute()
@@ -248,6 +249,51 @@ class ScheduledContent(Base):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertIsNone(run.test_post("app_feature"))
         self.assertEqual(self.built, [])
+
+
+class MetaConnection(Base):
+    def test_no_token_posts_nothing(self):
+        self.assertEqual(self.run_at(at(7, 0), env={}), [])
+        self.assertEqual(self.built, [])
+
+    def test_connection_warning_once_a_day(self):
+        cfg = config(meta={"status": "Action Needed", "status_message": "Data access ends in 5 day(s)."})
+        self.run_at(at(7, 0), cfg)
+        self.run_at(at(7, 15), cfg)
+        warnings = [p for p in self.slack.posts if "Meta connection" in p]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Data access ends", warnings[0])
+        self.assertEqual(self.events().count("Posted"), 2)  # still posts while the token works
+
+    def test_ok_connection_is_quiet(self):
+        self.run_at(at(7, 0), config(meta={"status": "OK"}))
+        self.assertFalse(any("Meta connection" in p for p in self.slack.posts))
+
+
+class WorkerToken(unittest.TestCase):
+    def test_token_from_frappe_replaces_env(self):
+        import blessing_worker
+        env = blessing_worker.with_meta_token({"meta": {"page_id": "1", "page_access_token": "from-frappe"}},
+                                              {"FB_PAGE_ACCESS_TOKEN": "old", "OTHER": "x"})
+        self.assertEqual((env["FB_PAGE_ACCESS_TOKEN"], env["FB_PAGE_ID"], env["OTHER"]), ("from-frappe", "1", "x"))
+
+    def test_migrate_only_when_frappe_has_none(self):
+        import blessing_worker
+
+        class Client:
+            calls = []
+
+            def call(self, method, **params):
+                self.calls.append((method, params))
+                return {"status": "OK"}
+
+        client = Client()
+        env = {"FB_PAGE_ID": "1", "FB_PAGE_ACCESS_TOKEN": "t"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(blessing_worker.migrate_token(client, {"meta": {"status": "OK"}}, env))
+            self.assertFalse(blessing_worker.migrate_token(client, {"meta": {"status": "Not Configured"}}, {}))
+            self.assertTrue(blessing_worker.migrate_token(client, {"meta": {"status": "Not Configured"}}, env))
+        self.assertEqual([c[0] for c in client.calls], ["seed_from_worker"])
 
 
 class Captions(unittest.TestCase):

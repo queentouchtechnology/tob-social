@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 METHOD_PREFIX = "truth_of_bible.social.blessing_automation."
+META_PREFIX = "truth_of_bible.social.meta_connection."
 
 
 class FrappeError(Exception):
@@ -19,9 +20,9 @@ class FrappeClient:
         self.url, self.timeout = url.rstrip("/"), timeout
         self.auth = f"token {api_key}:{api_secret}"
 
-    def call(self, method, **params):
+    def call(self, method, prefix=METHOD_PREFIX, **params):
         req = urllib.request.Request(
-            f"{self.url}/api/method/{METHOD_PREFIX}{method}",
+            f"{self.url}/api/method/{prefix}{method}",
             data=json.dumps(params).encode(),
             method="POST",
             headers={"Authorization": self.auth, "Content-Type": "application/json", "Accept": "application/json"},
