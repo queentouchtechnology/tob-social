@@ -50,4 +50,4 @@ Then tick **Automatic posting ON** in the control panel.
 | See what happened | **TOB Automation Log** in the Desk, or `journalctl -u tob-blessing -n 50` |
 | Is the worker alive? | *Worker Last Checked In* in the panel (should be < 30 min old) |
 | Local post history | `sudo -u tob .venv/bin/python post_blessing.py --history` |
-| Update the code | commit, then re-run step 2 (git archive + `bash deploy/setup.sh`) |
+| Update the code | commit and push, then `ssh tob-vps 'cd /opt/tob-social && sudo -u tob git pull -q && sudo -u tob .venv/bin/pip install -q -r requirements.txt'` — `/opt/tob-social` is a checkout of this repo (public, read-only over https) since 21 Oct 2026. Re-run step 2 only when the systemd files or system packages change. |

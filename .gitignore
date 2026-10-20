@@ -10,3 +10,4 @@ design_previews/
 post_log.txt
 __pycache__/
 *.pyc
+.venv/
