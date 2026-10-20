@@ -41,6 +41,10 @@ class FakeFrappe:
         self.events.append((event, fields.get("platform")))
         self.fields.append((event, fields))
 
+    def call(self, method, **fields):
+        self.calls = getattr(self, "calls", []) + [(method, fields)]
+        return {"url": "https://learn.example/mark?k=abc"}
+
 
 class FakeSlack:
     def __init__(self):
@@ -369,3 +373,41 @@ class TimeParsing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoogleByHand(Base):
+    """Google Business Profile until its API is approved: the post goes to Slack with Google's steps and a
+    Mark as posted link; only that link records it as posted (in Frappe)."""
+
+    def cfg(self):
+        return config(platforms=["facebook", "google"], google_post_url="https://business.google.com/posts/tob")
+
+    def test_ready_in_slack_with_steps_and_link(self):
+        self.run_at(at(6, 5), self.cfg())          # preview
+        results = self.run_at(at(7, 5), self.cfg())  # post time
+        by = {r["platform"]: r["status"] for r in results}
+        self.assertEqual(by, {"facebook": "PUBLISHED", "google": "PUBLISHED"})
+        text = self.slack.uploads[-1][1] if isinstance(self.slack.uploads[-1], tuple) else str(self.slack.uploads[-1])
+        self.assertIn("Post this on Google", text)
+        self.assertIn("https://business.google.com/posts/tob", text)
+        self.assertIn("<https://learn.example/mark?k=abc|Mark as posted>", text)
+        self.assertIn("The LORD bless thee", text)
+        method, fields = self.frappe.calls[-1]
+        self.assertEqual((method, fields["reference"], fields["post_type"], fields["blessing_verse"]),
+                         ("google_mark_link", "Numbers 6:24-26", "Blessing", "v1"))
+        posted = [p for e, p in self.frappe.events if e == "Posted"]
+        self.assertEqual(posted, ["facebook"])  # Google isn't "posted" until someone taps the link
+        self.assertTrue(any("ready in Slack" in t for t in self.slack.posts))
+
+    def test_not_twice_a_day(self):
+        self.run_at(at(7, 5), self.cfg())
+        n = len(self.slack.uploads)
+        self.run_at(at(7, 20), self.cfg())
+        self.assertEqual(len(self.slack.uploads), n)
+
+    def test_needs_slack(self):
+        results = self.run_at(at(7, 5), self.cfg(), slack=False)
+        google = next(r for r in results if r["platform"] == "google")
+        self.assertEqual(google["status"], "FAILED")
+        self.assertIn("Slack", google["error"])
+

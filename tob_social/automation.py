@@ -236,11 +236,13 @@ class Run:
             self.notify(f"Note: the {job.label.lower()} changed after the preview ({preview['verse_ref']} → "
                         f"{job.ref}), because approvals were edited. Posting the currently approved one.")
 
-        results = post_blessing.publish_all(self.build(retryable, self.env), publishers.Post(caption, image),
+        results = post_blessing.publish_all(self.publishers(retryable, job), publishers.Post(caption, image),
                                             self.today, self.history, {"ref": job.ref}, design, kind=job.kind)
         lines = []
         for r in results:
-            if r["status"] == PUBLISHED:
+            if r["status"] == PUBLISHED and r["platform"] in publishers.BY_HAND:
+                lines.append(f":memo: {r['platform']}: ready in Slack — post it by hand, then tap Mark as posted")
+            elif r["status"] == PUBLISHED:
                 self.log("Posted", job, platform=r["platform"], reference=job.ref, post_id=r["post_id"])
                 lines.append(f":white_check_mark: {r['platform']}: posted ({r['post_id']})")
             elif r["status"] == FAILED:
@@ -251,6 +253,18 @@ class Run:
         if lines:
             self.notify(f"*{job.label} — {job.ref}*\n" + "\n".join(lines))
         return results
+
+    def publishers(self, names, job):
+        """Publishers for these platforms: Meta's from the factory, then Google by hand (Slack + a Frappe link)."""
+        pubs = self.build([n for n in names if n not in publishers.BY_HAND], self.env)
+        if "google" in names:
+            def mark_link():
+                fields = {"reference": job.ref, "post_type": job.post_type}
+                if job.item and job.item.get("name"):
+                    fields[job.link_field] = job.item["name"]
+                return self.frappe.call("google_mark_link", **fields)["url"]
+            pubs.append(publishers.GoogleByHandPublisher(self.slack, self.cfg.get("google_post_url", ""), mark_link, job.label))
+        return pubs
 
     def test_post(self, kind=BLESSING):
         """Post the next approved verse (or content of `kind`, e.g. "salvation_prayer") NOW, ignoring post time, switches and today's posts —
@@ -272,7 +286,7 @@ class Run:
                 self.say(f"slack preview failed: {e}")
 
         post, results, lines = publishers.Post(caption, image), [], []
-        for pub in self.build(platforms, self.env):
+        for pub in self.build([p for p in platforms if p not in publishers.BY_HAND], self.env):
             try:
                 r = pub.publish(post)
             except publishers.PublishError as e:
